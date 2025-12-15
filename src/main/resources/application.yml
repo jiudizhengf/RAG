@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: RAG-Service
+  datasource:
+    url: jdbc:postgresql://localhost:5433/nexus_brain_db
+    username: postgres
+    password: 1234
+    driver-class-name: org.postgresql.Driver
+  ai:
+    openai:
+      api-key: ${AI_API_KEY:sk-e819eeb045764fe1b4976790800b576d}
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: qwen-plus
+      embedding:
+        options:
+          model: text-embedding-v2
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+      enabled: true
+  mvc:
+    async:
+      request-timeout: 60000
+jwt:
+  secret: ThisIsAVerySecretKeyForNexusBrainProjectDoNotLeakIt
+  expiration: 86400000
+
