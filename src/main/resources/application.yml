@@ -29,6 +29,11 @@ spring:
   mvc:
     async:
       request-timeout: 60000
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
 jwt:
   secret: ThisIsAVerySecretKeyForNexusBrainProjectDoNotLeakIt
   expiration: 86400000

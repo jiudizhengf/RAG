@@ -16,6 +16,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,6 +25,7 @@ import org.apache.tika.metadata.Metadata;
 import org.springframework.ai.document.Document;
 
 import java.io.InputStream;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -37,7 +39,7 @@ public class RagServiceImpl implements RagService {
     private final JdbcClient jdbcClient;
     private final Tika tika = new Tika();
     private final ChatClient.Builder chatClientBuilder;
-
+    private final RedisTemplate<String,Object> redisTemplate;
     @Override
     public String uploadAndProcess(MultipartFile file) {
         //获取当前用户的权限组
@@ -124,6 +126,17 @@ public class RagServiceImpl implements RagService {
         if(userRoles==null||userRoles.isEmpty()){
             return "用户未登录或无权限。";
         }
+        //构建Redis缓存
+        // 格式：chat:{角色哈希}:{问题哈希}
+        // 为什么要把角色加进去？防止 HR 问完答案被缓存，研发问同样问题查到了 HR 的答案
+        String roleKey = userRoles.stream().sorted().reduce("",String::concat);
+        String cacheKey = "chat:"+roleKey.hashCode()+":"+query.hashCode();
+        //先查缓存
+        Object cachedAnswer = redisTemplate.opsForValue().get(cacheKey);
+        if(cachedAnswer!=null){
+            log.info("命中缓存，key={}",cacheKey);
+            return cachedAnswer.toString();
+        }
         //把用户的问题变成向量
         List<Double> queryEmbedding = embeddingModel.embed(query);
         //在向量数据库中检索最相似的top5片段
@@ -167,7 +180,10 @@ public class RagServiceImpl implements RagService {
         ));
         //调用AI生成回答
         ChatClient chatClient = chatClientBuilder.build();
-        return chatClient.prompt(prompt1).call().content();
-
+        String finalAnswer =  chatClient.prompt(prompt1).call().content();
+        //存入缓存，设置过期时间60分钟
+        redisTemplate.opsForValue().set(cacheKey,finalAnswer, Duration.ofHours(1));
+        log.info("存入缓存，key={}",cacheKey);
+        return finalAnswer;
     }
 }
