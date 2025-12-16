@@ -23,6 +23,8 @@ public class KbDocument {
     private String status;
 
     private String permissionGroup;
+
+    private String fileHash;
     // 错误信息，用于排查问题
     @Column(columnDefinition = "TEXT")
     private String errorMessage;

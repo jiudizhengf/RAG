@@ -3,6 +3,7 @@ package org.example.rag.service.Impl;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.tika.Tika;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
@@ -28,6 +29,7 @@ import org.apache.tika.metadata.Metadata;
 import org.springframework.ai.document.Document;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.List;
@@ -71,15 +73,30 @@ public class RagServiceImpl implements RagService {
             String fileName=System.currentTimeMillis()+"_"+file.getOriginalFilename();
             File localFile = new File(dir,fileName);
             file.transferTo(localFile);
+            String fileHash;
+            //计算文件MD5
+            try(FileInputStream fileInputStream = new FileInputStream(localFile)){
+                fileHash = DigestUtils.md5Hex(fileInputStream);
+            }
+            //检测是否重复上传
+            boolean exists = kbDocumentRepository.existsByFileHashAndPermissionGroup(fileHash, targetGroup);
+            if(exists){
+                log.info("文件已存在，上传被拒绝，文件MD5={},权限组={}",fileHash,targetGroup);
+                if(localFile.exists()){
+                    localFile.delete();
+                }
+                return "文件已存在，上传被拒绝";
+            }
             //数据库登记
             //登记文件信息
-
             kbDoc.setFilename(file.getOriginalFilename());
             kbDoc.setFileSize(file.getSize());
             kbDoc.setFiletype(file.getContentType());
             kbDoc.setPermissionGroup(targetGroup);
+            kbDoc.setFileHash(fileHash);
             kbDoc.setStatus("PENDING");
             kbDoc = kbDocumentRepository.save(kbDoc);
+
             //发送消息到消息队列
             DocUploadMessage msg = new DocUploadMessage(
                     kbDoc.getId(),
