@@ -1,6 +1,7 @@
 package org.example.rag.mq;
 
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Channel;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
@@ -26,7 +27,9 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -35,6 +38,7 @@ public class RagConsumer {
     private final KbDocumentRepository documentRepository;
     private final EmbeddingModel embeddingModel;
     private final JdbcClient jdbcClient;
+    private final ObjectMapper objectMapper; // Spring Boot 自动注入
 
     @RabbitListener(queues = RabbitConfig.RAG_UPLOAD_QUEUE)
     public void processUpload(DocUploadMessage msg, Channel channel, @Header(AmqpHeaders.DELIVERY_TAG) long tag){
@@ -70,7 +74,16 @@ public class RagConsumer {
             TokenTextSplitter splitter = new TokenTextSplitter(800,350,5,10000,true);
             List<Document> chunks = splitter.split(new Document(content));
             //向向量数据库插入
+            int chunkIndex = 0;
             for(Document chunk:chunks){
+                // 1. 动态构建 Metadata
+                Map<String, Object> metadataMap = new HashMap<>();
+                metadataMap.put("source", "rabbitmq"); // 保留来源标识
+                metadataMap.put("filename", kbDoc.getFilename()); // ✅ 关键：原文件名
+                metadataMap.put("file_id", kbDoc.getId()); // 文件 ID
+                metadataMap.put("chunk_index", chunkIndex++);
+                // 2. 转成 JSON 字符串
+                String metadataJson = objectMapper.writeValueAsString(metadataMap);
                 List<Double> embedding = embeddingModel.embed(chunk.getContent());
                 String sql = """
                     INSERT INTO document_chunks (doc_id, content, metadata, embedding)
@@ -79,7 +92,7 @@ public class RagConsumer {
                 jdbcClient.sql(sql)
                     .param("docId", msg.getDocId())
                     .param("content", chunk.getContent())
-                    .param("metadata", "{\"source\": \"mq_async\"}")
+                    .param("metadata", metadataJson)
                     .param("embedding", embedding.toString())
                     .update();
             }
