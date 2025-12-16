@@ -8,7 +8,9 @@ import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
 import org.example.rag.common.UserContext;
+import org.example.rag.config.RabbitConfig;
 import org.example.rag.entity.KbDocument;
+import org.example.rag.entity.dto.DocUploadMessage;
 import org.example.rag.repository.KbDocumentRepository;
 import org.example.rag.service.RagService;
 import org.springframework.ai.chat.client.ChatClient;
@@ -16,6 +18,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -24,6 +27,7 @@ import org.apache.tika.metadata.Metadata;
 
 import org.springframework.ai.document.Document;
 
+import java.io.File;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.List;
@@ -40,7 +44,12 @@ public class RagServiceImpl implements RagService {
     private final Tika tika = new Tika();
     private final ChatClient.Builder chatClientBuilder;
     private final RedisTemplate<String,Object> redisTemplate;
+    private final RabbitTemplate rabbitTemplate;
+    //指定用户存储目录
+    private final String UPLOAD_DIR = System.getProperty("user.dir") + "/uploads/";
+
     @Override
+    @Transactional
     public String uploadAndProcess(MultipartFile file) {
         //获取当前用户的权限组
         // 1. 获取当前用户信息
@@ -51,52 +60,36 @@ public class RagServiceImpl implements RagService {
             throw new RuntimeException("用户未登录或无权限");
         }
         String targetGroup = roles.get(0);
-        //登记文件信息
         KbDocument kbDoc = new KbDocument();
-        kbDoc.setFilename(file.getOriginalFilename());
-        kbDoc.setFileSize(file.getSize());
-        kbDoc.setFiletype(file.getContentType());
-        kbDoc.setPermissionGroup(targetGroup);
-        kbDoc.setStatus("PROCESSING");
-        kbDoc = kbDocumentRepository.save(kbDoc);
-        String content;
-        try(InputStream stream = file.getInputStream()){
-            //Tika 解析
-            // -1 表示禁用字符数限制 (writeLimit)
-            BodyContentHandler handler = new BodyContentHandler(-1);
-            AutoDetectParser parser = new AutoDetectParser();
-            Metadata metadata = new Metadata();
-            ParseContext context = new ParseContext();
-            parser.parse(stream, handler, metadata, context);
-
-            content = handler.toString();
-
-            if(content==null||content.isEmpty()){
-                throw new RuntimeException("文件解析失败，内容为空");
+        try{
+            //先把文件存本地
+            File dir = new File(UPLOAD_DIR);
+            if(!dir.exists()){
+                dir.mkdirs();
             }
-            //文本切片
-            TokenTextSplitter splitter = new TokenTextSplitter(800,350,5,10000,true);
-            List<Document> chunks = splitter.split(new Document(content));
+            //文件落盘
+            String fileName=System.currentTimeMillis()+"_"+file.getOriginalFilename();
+            File localFile = new File(dir,fileName);
+            file.transferTo(localFile);
+            //数据库登记
+            //登记文件信息
 
-            //向量化并且入库
-            for(Document chunk:chunks){
-                List<Double> embedding = embeddingModel.embed(chunk.getContent());
-                //使用JdbcClient插入PGvector向量数据
-                String insertSql= """
-                     INSERT INTO document_chunks (doc_id, content, metadata, embedding)
-                VALUES (:docId, :content, :metadata::jsonb, :embedding::vector)""";
-                jdbcClient.sql(insertSql).param("docId",kbDoc.getId())
-                        .param("content",chunk.getContent())
-                        .param("metadata","{\"source\": \""+kbDoc.getFilename()+"\"}")
-                        .param("embedding",embedding.toString())
-                        .update();
-                //更新日志
-                kbDoc.setStatus("COMPLETED");
-                kbDocumentRepository.save(kbDoc);
-                //Thread.sleep(1000);
-
-            }
-            return "文件上传并处理成功,切片数量:"+chunks.size();
+            kbDoc.setFilename(file.getOriginalFilename());
+            kbDoc.setFileSize(file.getSize());
+            kbDoc.setFiletype(file.getContentType());
+            kbDoc.setPermissionGroup(targetGroup);
+            kbDoc.setStatus("PENDING");
+            kbDoc = kbDocumentRepository.save(kbDoc);
+            //发送消息到消息队列
+            DocUploadMessage msg = new DocUploadMessage(
+                    kbDoc.getId(),
+                    localFile.getAbsolutePath(),
+                    userId,
+                    targetGroup
+            );
+            rabbitTemplate.convertAndSend(RabbitConfig.RAG_UPLOAD_QUEUE,msg);
+            log.info("消息已发送至MQ{}",msg);
+            return "文件上传成功，正在后台处理";
         } catch (Exception e) {
             log.error("处理文件时出错:", e);
             kbDoc.setStatus("FAILED");
