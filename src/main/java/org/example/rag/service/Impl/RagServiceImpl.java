@@ -4,7 +4,6 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.digest.DigestUtils;
-import org.apache.tika.Tika;
 import org.example.rag.common.UserContext;
 import org.example.rag.config.RabbitConfig;
 import org.example.rag.entity.KbDocument;
@@ -35,7 +34,6 @@ public class RagServiceImpl implements RagService {
     private final KbDocumentRepository kbDocumentRepository;
     private final EmbeddingModel embeddingModel;
     private final JdbcClient jdbcClient;
-    private final Tika tika = new Tika();
     private final ChatClient.Builder chatClientBuilder;
     private final RedisTemplate<String,Object> redisTemplate;
     private final RabbitTemplate rabbitTemplate;
