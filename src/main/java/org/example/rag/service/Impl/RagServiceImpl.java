@@ -94,7 +94,7 @@ public class RagServiceImpl implements RagService {
                     userId,
                     targetGroup
             );
-            rabbitTemplate.convertAndSend(RabbitConfig.RAG_UPLOAD_QUEUE,msg);
+            rabbitTemplate.convertAndSend(RabbitConfig.RAG_UPLOAD_EXCHANGE,RabbitConfig.RAG_ROUTING_KEY,msg);
             log.info("消息已发送至MQ{}",msg);
             return "文件上传成功，正在后台处理";
         } catch (Exception e) {
@@ -130,7 +130,9 @@ public class RagServiceImpl implements RagService {
         // 格式：chat:{角色哈希}:{问题哈希}
         // 为什么要把角色加进去？防止 HR 问完答案被缓存，研发问同样问题查到了 HR 的答案
         String roleKey = userRoles.stream().sorted().reduce("",String::concat);
-        String cacheKey = "chat:"+roleKey.hashCode()+":"+query.hashCode();
+        String queryHash =DigestUtils.sha256Hex(query);
+        String roleHash = DigestUtils.md5Hex(roleKey);
+        String cacheKey = "chat:"+roleHash+":"+queryHash;
         //先查缓存
         Object cachedAnswer = redisTemplate.opsForValue().get(cacheKey);
         if(cachedAnswer!=null){
@@ -164,12 +166,12 @@ public class RagServiceImpl implements RagService {
         String prompt = """
             你是一个专业的企业级知识助手。
             请仅根据以下提供的[参考资料]来回答用户的[问题]。
-            如果[参考资料]中没有包含答案，请直接回答“我不知道”，不要编造信息。
+            如果[参考资料]中没有包含答案，请直接回答"我不知道"，不要编造信息。
             
-            [参考资料]：
+            [参考资料]:
             {context}
             
-            [问题]：
+            [问题]:
             {question}
             """;
         //替换模板中的变量
