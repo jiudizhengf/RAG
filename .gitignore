@@ -31,3 +31,24 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 敏感信息保护 ###
+# 配置文件（包含密码、API密钥等）
+application.yml
+application-*.yml
+application.properties
+application-*.properties
+.env
+
+# 上传文件临时目录
+uploads/
+
+# 日志文件
+*.log
+logs/
+
+### 其他 ###
+.DS_Store
+*.bak
+*.swp
+*~
