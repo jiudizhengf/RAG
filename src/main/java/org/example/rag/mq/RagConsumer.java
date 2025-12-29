@@ -10,6 +10,7 @@ import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.Parser;
 import org.apache.tika.sax.BodyContentHandler;
 import org.example.rag.entity.KbDocument;
+import org.example.rag.service.StorageService;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -48,6 +49,7 @@ public class RagConsumer {
     private final RedisTemplate<String, Object> redisTemplate;
     //事务模版，保证向量入库一致性
     private final TransactionTemplate transactionTemplate;
+    private final StorageService storageService;
 
     @RabbitListener(queues = RabbitConfig.RAG_UPLOAD_QUEUE, concurrency = "5-10")
     public void processUpload(DocUploadMessage msg, Channel channel, @Header(AmqpHeaders.DELIVERY_TAG) long tag) {
@@ -104,17 +106,15 @@ public class RagConsumer {
      * @throws Exception
      */
     private void processDocumentLogic(KbDocument kbDoc, DocUploadMessage msg) throws Exception {
-        File file = new File(msg.getLocalFilePath());
-        if (!file.exists()) {
-            throw new RuntimeException("文件不存在: " + msg.getLocalFilePath());
-        }
+        String ossKey = msg.getLocalFilePath();
+
         //Tika解析
         String content;
-        try (InputStream stream = new FileInputStream(file)) {
+        try (InputStream stream = storageService.getFileStream(ossKey)) {
             BodyContentHandler bodyContentHandler = new BodyContentHandler(-1);
             Parser parser = new AutoDetectParser();
             Metadata metadata = new Metadata();
-            metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, file.getName());
+            metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, kbDoc.getFilename());
             ParseContext context = new ParseContext();
             parser.parse(stream, bodyContentHandler, metadata, context);
             content = bodyContentHandler.toString();
@@ -164,10 +164,7 @@ public class RagConsumer {
         //更新状态为完成
         kbDoc.setStatus("COMPLETED");
         documentRepository.save(kbDoc);
-        //删除本地文件
-        if(file.exists()) {
-            file.delete();
-        }
+
     }
     /**
      * 辅助方法：记录失败原因

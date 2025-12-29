@@ -10,6 +10,7 @@ import org.example.rag.entity.KbDocument;
 import org.example.rag.entity.dto.DocUploadMessage;
 import org.example.rag.repository.KbDocumentRepository;
 import org.example.rag.service.RagService;
+import org.example.rag.service.StorageService;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
@@ -22,6 +23,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +41,7 @@ public class RagServiceImpl implements RagService {
     private final RabbitTemplate rabbitTemplate;
     //指定用户存储目录
     private final String UPLOAD_DIR = System.getProperty("user.dir") + "/uploads/";
+    private final StorageService storageService;
 
     @Override
     @Transactional
@@ -54,28 +57,21 @@ public class RagServiceImpl implements RagService {
         String targetGroup = roles.get(0);
         KbDocument kbDoc = new KbDocument();
         try{
-            //先把文件存本地
-            File dir = new File(UPLOAD_DIR);
-            if(!dir.exists()){
-                dir.mkdirs();
-            }
-            //文件落盘
-            String fileName=System.currentTimeMillis()+"_"+file.getOriginalFilename();
-            File localFile = new File(dir,fileName);
-            file.transferTo(localFile);
             String fileHash;
             //计算文件MD5
-            try(FileInputStream fileInputStream = new FileInputStream(localFile)){
+            try(InputStream fileInputStream = file.getInputStream()){
                 fileHash = DigestUtils.md5Hex(fileInputStream);
             }
             //检测是否重复上传
             boolean exists = kbDocumentRepository.existsByFileHashAndPermissionGroup(fileHash, targetGroup);
             if(exists){
                 log.info("文件已存在，上传被拒绝，文件MD5={},权限组={}",fileHash,targetGroup);
-                if(localFile.exists()){
-                    localFile.delete();
-                }
                 return "文件已存在，上传被拒绝";
+            }
+            //上传到OSS
+            String objectName=String.format("rag-docs/%s/%s_%s",targetGroup,fileHash,file.getOriginalFilename());
+            try(InputStream inputStream = file.getInputStream()){
+                storageService.upload(objectName,inputStream);
             }
             //数据库登记
             //登记文件信息
@@ -90,7 +86,7 @@ public class RagServiceImpl implements RagService {
             //发送消息到消息队列
             DocUploadMessage msg = new DocUploadMessage(
                     kbDoc.getId(),
-                    localFile.getAbsolutePath(),
+                    objectName,
                     userId,
                     targetGroup
             );
