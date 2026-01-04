@@ -5,7 +5,6 @@ import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.MapPropertySource;
 
-import javax.management.ObjectName;
 import java.util.HashMap;
 import java.util.Map;
 
